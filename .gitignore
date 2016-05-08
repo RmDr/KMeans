@@ -1,6 +1,3 @@
-*
-!*.cpp
-!*.txt
 /shad_cpp2_dz5.VC.db
 # Compiled Object files
 *.slo
