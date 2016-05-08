@@ -20,15 +20,18 @@ using std::unordered_set;
 class Object {
 public:
     Object() {}
+    // Returns the inner vector.
     vector<double> & Data() {
         return features_;
     }
     int Dim() const {
         return static_cast<int>(features_.size());
     }
+    // Adds new coordinate.
     void Push(double value) {
         features_.push_back(value);
     }
+    // Returns coordinate number index.
     double operator[](int index) const {
         return features_.at(index);
     }
@@ -45,7 +48,9 @@ private:
 
 // Represents a cluster of objects.
 struct Cluster {
+    // Pointers on clustered objects.
     unordered_set<const Object *> objects;
+    // The center of mass (usually) of clustered objects.
     Object center;
     void Print() const {
         cout << "center of cluster:" << endl;
