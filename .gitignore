@@ -1,8 +1,16 @@
-*
-!*.cpp
-!*.txt
-!*.h
-!/.gitignore
+/Debug
+!shad_cpp2_dz5/test.txt
+*.ilk
+*.pdb
+*.error
+*.tlog
+*.sln
+*.log
+*.enc
+*.vcxproj
+*.idb
+*.db
+*.filters
 
 # Compiled Object files
 *.slo
