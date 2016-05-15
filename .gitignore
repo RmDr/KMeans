@@ -12,6 +12,7 @@
 *.db
 *.filters
 *.opendb
+.vs/shad_cpp2_dz5/v14
 
 # Compiled Object files
 *.slo
