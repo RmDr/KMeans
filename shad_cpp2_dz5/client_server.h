@@ -14,11 +14,17 @@
 using std::cout;
 using std::endl;
 
-
-// Represents an object in n-dim space.
+class Cluster;
+// Represents an point in n-dim space.
 class Object {
+    friend Cluster;
 public:
 	Object() {}
+    Object(int dim) {
+        for (int i = 0; i < dim; ++i) {
+            features_.push_back(0);
+        }
+    }
 	// Returns the inner vector.
 	std::vector<double> & Data() {
 		return features_;
@@ -37,85 +43,137 @@ public:
 	double operator[](int index) const {
 		return features_.at(index);
 	}
-	void Print() const {
+    void SetNull() {
+        for (double & coordinate : features_) {
+            coordinate = 0;
+        }
+    }
+
+    Object operator+=(const Object & other) {
+        if (Dim() != other.Dim()) {
+            throw "Objects have different dimensions.";
+        }
+        for (int iter = 0; iter < Dim(); ++iter) {
+            features_[iter] += other.features_[iter];
+        }
+        return *this;
+    }
+
+    bool operator==(const Object & other) const {
+        if (Dim() != other.Dim()) {
+            throw "Objects have different dimensions.";
+        }
+        for (int i = 0; i < Dim(); ++i) {
+            if (features_[i] != other.features_[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    Object operator/=(int number) {
+        for (int iter = 0; iter < Dim(); ++iter) {
+            features_[iter] /= number;
+        }
+        return *this;
+    }
+
+	void Print(std::ostream & stream = std::cout) const {
 		for (auto feature : features_) {
-			std::cout << feature << " ";
+			stream << feature << " ";
 		}
-		std::cout << std::endl;
+		stream << std::endl;
 	}
-private:
-	int dim_;
+
+protected:
 	std::vector<double> features_;
 };
 
-// Represents a cluster of objects.
-struct Cluster {
-	// Pointers on clustered objects.
-	std::unordered_set<const Object *> objects;
-	// The center of mass (usually) of clustered objects.
-	Object center;
-	void Print() const {
-		std::cout << "center of cluster:" << std::endl;
-		center.Print();
-		std::cout << "objects in cluster:" << std::endl;
-		for (auto ob : objects) {
-			ob->Print();
-		}
-		std::cout << std::endl;
-	}
+class Cluster : public Object {
+public:
+    Cluster & operator=(const Object & other) {
+        this->features_ = other.features_;
+        return *this;
+    }
+    Cluster() : n_points_near(0) {}
+    Cluster(int dim) : n_points_near(0) {
+        for (int i = 0; i < dim; ++i) {
+            features_.push_back(0);
+        }
+    }
+    void SetNull() {
+        for (double & coordinate : features_) {
+            coordinate = 0;
+        }
+        n_points_near = 0;
+    }
+    int n_points_near;
 };
 
+// Calculates distance between two objects.
+double Distance(const Object & ob1, const Object & ob2) {
+    double distance = 0;
+    int dim = ob1.Dim();
+    for (int i = 0; i < dim; ++i) {
+        distance += (ob1[i] - ob2[i]) * (ob1[i] - ob2[i]);
+    }
+    distance = sqrt(distance);
+    return distance;
+}
+
 // Slave Client
-class CenterOfMassCalculator {
-public:
-	void operator()(const std::unordered_set<const Object *> & points, Object & result) {
-		std::cout << points.size() << std::endl;
-		if (points.size() == 0) {
-			cout << "CalculateCenter: points.size() == 0." << endl;
-			throw "CalculateCenter: points.size() == 0.";
-		}
-		int dim = (*points.begin())->Dim();
-		for (int coord = 0; coord < dim; ++coord) {
-			double current_coord = 0;
-			for (const Object * object : points) {
-				current_coord += (*object)[coord];
-			}
-			current_coord /= points.size();
-			result.Push(current_coord);
-		}
-	}
-};
+void CalculateNearestClusters(
+    const std::vector<Object> objects, 
+    const std::vector<Cluster> & old_cluters,
+    std::vector<Cluster> & new_clusters) {
+    new_clusters.resize(old_cluters.size(), Cluster(old_cluters[0].Dim()));
+    for (const auto & ob : objects) {
+        int min_index = 0;
+        double min_distance = 1000000000;
+        for (int index = 0; index < old_cluters.size(); ++index) {
+            double dist = Distance(ob, old_cluters[index]);
+            if (dist < min_distance) {
+                min_distance = dist;
+                min_index = index;
+            }
+        }
+        new_clusters[min_index] += ob;
+        ++new_clusters[min_index].n_points_near;
+    }
+}
 
 // Reads pool, divides it in parts, starts slave clients.
 class Client {
 public:
-	Client(int n_jobs = 2, int n_clusters = 2)
-		: n_jobs_(n_jobs)
-		, n_clusters_(n_clusters) {}
+	Client(int dim, int n_clusters, int n_jobs, std::string input_file_name)
+		: dim_(dim)
+		, n_clusters_(n_clusters)
+        , n_jobs_(n_jobs)
+		, input_file_name_(input_file_name) {}
 
+	// Clusters.
 	void ProcessStreamPool() {
 		ReadPool();
-		dim_ = objects_.back().Dim();
-		GenerateRandomClusters(n_clusters_);
-		ReClusterObjects();
-
-		if (n_jobs_ > n_clusters_) {
-			n_jobs_ = n_clusters_;
+		cout << "Start of clustering objects" << endl; // for debugging and process supervision.
+		GenerateRandomClusters();
+		int iteration = 0; // for debugging and process supervision.
+        for (const auto & cluster : clusters_) {
+            cluster.Print();
+        }
+		while (Recluster()) {
+			if (iteration % 10 == 0) {
+				cout << "Clustering iteration number " << iteration << "." << endl; // for debugging and process supervision.
+			}
+			++iteration;
 		}
-		part_size_ = objects_.size() % n_jobs_;
-
-		bool diff = true;
-		while (diff) {
-			diff = ReCalculateCenters();
-			ReClusterObjects();
-			PrintClusters();
-		}
+		cout << "End of clustering objects" << endl; // for debugging and process supervision.
 	}
 
+	// Prints contained clusters centers and points.
 	void PrintClusters() const {
 		std::cout << "   Strating clusters printing." << std::endl;
 		int index = 0;
-		for (const Cluster & cluster : clusters) {
+		for (const Object & cluster : clusters_) {
 			std::cout << "       Cluster index = " << index << std::endl;
 			cluster.Print();
 			++index;
@@ -123,109 +181,101 @@ public:
 		std::cout << "   End of clusters printing." << std::endl;
 	}
 
+	// Returns contained clusters.
 	std::vector<Cluster> GetClusters() const {
-		return clusters;
+		return clusters_;
 	}
 
 private:
-	std::list<Object> objects_;
-	int n_jobs_, n_clusters_, dim_, part_size_;
-	std::vector<Cluster> clusters;
+	// Objects for clustering.
+    std::vector<std::vector<Object>> object_parts_;
 
+	int dim_, n_clusters_, n_jobs_;
+    int n_objects_;
+	std::string input_file_name_;
+	std::vector<Cluster> clusters_;
+
+    // Reads pool and divides it in parts for multithreading.
 	void ReadPool() {
-		std::ifstream stream("test.txt");
+		std::ifstream stream(input_file_name_);
 		std::string current_line;
+        int part_iter = 0;
+        object_parts_.resize(n_jobs_,  std::vector<Object>());
 		while (std::getline(stream, current_line)) {
-			objects_.push_back(Object());
+            object_parts_[part_iter].push_back(Object());
 			std::stringstream current_stream(current_line);
 			int index;
 			current_stream >> index;
 			double coordinate;
 			while (current_stream >> coordinate) {
-				objects_.back().Push(coordinate);
+                object_parts_[part_iter].back().Push(coordinate);
 			}
+            ++part_iter;
+            if (part_iter == n_jobs_) {
+                part_iter = 0;
+            }
 		}
-		std::cout << objects_.size() << std::endl;
-		objects_.back().Print();
-	}
-
-	// Calculates distance between two objects.
-	double Distance(const Object & ob1, const Object & ob2) {
-		double distance = 0;
-		for (int i = 0; i < dim_; ++i) {
-			distance += (ob1[i] - ob2[i]) * (ob1[i] - ob2[i]);
-		}
-		distance = sqrt(distance);
-		return distance;
+        n_objects_ = 0;
+        for (const auto part : object_parts_) {
+            n_objects_ += part.size();
+        }
+		/* begin of debugging cout */
+		std::cout << "End of reading pool." << std::endl;
+		std::cout << "The number of objects for clustering is " << n_objects_ << "." << std::endl;
+		std::cout << endl;
+		/* end of debugging cout */
 	}
 
 	// Initializes clusters centers using random points.
-	void GenerateRandomClusters(int n_clusters) {
-		if (n_clusters > objects_.size()) {
-			throw "n_clusters > objects.size()";
-		}
+	void GenerateRandomClusters() {
 		std::default_random_engine engine(42);
-		std::uniform_int_distribution<int> rnd(0, (int)(objects_.size()));
+		std::uniform_int_distribution<int> rnd(0, n_objects_);
 		std::vector<const Object *> unused;
-		for (const Object & ob : objects_) {
-			unused.push_back(&ob);
-		}
-		for (int i = 0; i < n_clusters; ++i) {
-			Cluster cluster;
+        for (const auto & part : object_parts_) {
+            for (const auto & ob : part) {
+                unused.push_back(&ob);
+            }
+        }
 
+		for (int i = 0; i < n_clusters_; ++i) {
+            Cluster cluster;
 			int unused_index = rnd(engine) % unused.size();
-			cluster.center = *(unused[unused_index]);
+			cluster = *(unused[unused_index]);
 			unused.erase(unused.begin() + unused_index);
-
-			clusters.push_back(cluster);
+			clusters_.push_back(cluster);
 		}
 	}
 
-	// Calculates centers for clusters with fixed objects.
-	bool ReCalculateCenters() {
-		std::vector<std::thread> threads;
-		std::vector<Object> old_centers;
-		std::vector<Object> new_centers;
-		for (const Cluster & cluster : clusters) {
-			old_centers.push_back(cluster.center);
-			new_centers.push_back(Object());
-		}
-		for (int i = 0; i < clusters.size(); ++i) {
-			CenterOfMassCalculator calculator;
-			threads.push_back(std::thread(CenterOfMassCalculator(), std::ref(clusters[i].objects), std::ref(new_centers[i])));
-		}
-
-		for (auto & thread : threads) {
-			thread.join();
-		}
-		bool diff = false;
-		for (int i = 0; i < old_centers.size(); ++i) {
-			if (old_centers[i].Data() != new_centers[i].Data()) {
-				diff = true;
-			}
-			clusters[i].center = new_centers[i];
-		}
-		return diff;
-	}
-
-	// Calculates objects for clusters with fixed centers.
-	void ReClusterObjects() {
-		for (Cluster & cluster : clusters) {
-			cluster.objects.clear();
-		}
-		for (const Object & ob : objects_) {
-			Cluster * nearest = &clusters.back();
-			double min_distance = Distance(nearest->center, ob);
-			for (Cluster & cluster : clusters) {
-				double distance = Distance(cluster.center, ob);
-				if (distance < min_distance) {
-					min_distance = distance;
-					nearest = &cluster;
-				}
-			}
-			nearest->objects.insert(&ob);
-		}
-	}
-
-
+    bool Recluster() {
+        std::vector<Cluster> old_clusters = clusters_;
+        std::vector<std::vector<Cluster>> new_clusters(n_jobs_);
+        std::vector<std::thread> threads;
+        for (int i = 0; i < n_jobs_; ++i) {
+            threads.push_back(std::thread(
+                CalculateNearestClusters, 
+                std::cref(object_parts_[i]), 
+                std::cref(old_clusters), 
+                std::ref(new_clusters[i])));
+        }
+        for (auto & cluster : clusters_) {
+            cluster.SetNull();
+        }
+        for (std::thread & thread : threads) {
+            thread.join();
+        }
+        for (int i_job = 0; i_job < n_jobs_; ++i_job) {
+            for (int i_cluster = 0; i_cluster < clusters_.size(); ++i_cluster) {
+                clusters_[i_cluster] += new_clusters[i_job][i_cluster];
+                clusters_[i_cluster].n_points_near += new_clusters[i_job][i_cluster].n_points_near;
+            }
+        }
+        for (auto & cluster : clusters_) {
+            cluster /= cluster.n_points_near;
+        }
+        if (old_clusters != clusters_) {
+            return true;
+        } else {
+            return false;
+        }
+    }
 };
